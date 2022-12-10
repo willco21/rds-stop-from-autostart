@@ -1,0 +1,176 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  CloudFormation template for EventBridge rule
+  'rds-cluster-from-autostart'
+Resources:
+  EventBridgePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: Amazon_EventBridge_Stop_Rds_Cluster_From_Autostart
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Allow
+            Action: 'iam:PassRole'
+            Resource: !GetAtt SsmAutomationRole.Arn
+            Condition:
+              StringLikeIfExists:
+                'iam:PassedToService': ssm.amazonaws.com
+          - Sid: VisualEditor1
+            Effect: Allow
+            Action: 'ssm:StartAutomationExecution'
+            Resource:
+              - !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:automation-definition/${SsmAutomationStopRdsCluster}:$DEFAULT
+              #- !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:automation-definition/SRE-StopRdsCluster-NEW:$DEFAULT'
+
+  EventBridgeRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: Amazon_EventBridge_Stop_Rds_Cluster_From_Autostart
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'AllowCloudTrail'
+            Effect: Allow
+            Principal:
+              Service: events.amazonaws.com
+            Action: 'sts:AssumeRole'
+      Description: EventBridge role for Invoke Start Automation Execution
+      ManagedPolicyArns:
+        - !Ref EventBridgePolicy
+
+  SsmAutomationPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: SSM_Automation_Start_Stop_RDS_Cluster
+      PolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: VisualEditor0
+            Effect: Allow
+            Action:
+              - rds:StopDBCluster
+              - rds:DescribeDBClusters
+            Resource: !Sub arn:${AWS::Partition}:rds:*:${AWS::AccountId}:cluster:*
+
+  SsmAutomationRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: SSM_Automation_Start_Stop_RDS_Cluster
+      AssumeRolePolicyDocument:
+        Version: '2012-10-17'
+        Statement:
+          - Sid: 'AllowCloudTrail'
+            Effect: Allow
+            Principal:
+              Service: ssm.amazonaws.com
+            Action: 'sts:AssumeRole'
+            Condition:
+              StringEquals:
+                aws:SourceAccount: !Ref AWS::AccountId
+              ArnLike:
+                aws:SourceArn': !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:automation-execution/*
+      Description: SSM Automation role for Execute Automation
+      ManagedPolicyArns:
+        - arn:aws:iam::aws:policy/service-role/AmazonSSMAutomationRole
+        - !Ref SsmAutomationPolicy
+
+  EventRule0:
+    Type: AWS::Events::Rule
+    Properties:
+      Name: Stop_Rds_Cluster_From_Autostart
+      EventBusName: default
+      EventPattern:
+        source:
+          - aws.rds
+        detail-type:
+          - RDS DB Cluster Event
+        detail:
+          EventID:
+            - RDS-EVENT-0153
+      State: ENABLED
+      Targets:
+        - Id: Id7aa1a379-1cb6-46bd-90d2-038a38e85c7d
+          Arn: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${SsmAutomationStopRdsCluster}:$DEFAULT
+            #arn:aws:ssm:ap-northeast-1:811463838477:automation-definition/SRE-StopRdsCluster-NEW:$DEFAULT
+          RoleArn: !GetAtt SsmAutomationRole.Arn
+          InputTransformer:
+            InputPathsMap:
+              ClusterName: $.detail.SourceIdentifier
+            InputTemplate: !Sub |
+              {
+                "ClusterName": ["<ClusterName>"],
+                "AutomationAssumeRole": ["${SsmAutomationRole.Arn}"]
+              }
+  SsmAutomationStopRdsCluster:
+    Type: AWS::SSM::Document
+    Properties:
+      DocumentType: Automation
+      Name: StopRdsCluster
+      UpdateMethod: NewVersion
+      DocumentFormat: YAML
+      Content:
+        description: Stop RDS Cluster
+        schemaVersion: '0.3'
+        assumeRole: '{{ AutomationAssumeRole }}'
+        parameters:
+          ClusterName:
+            type: String
+            description: (Required) RDS Cluster Id to stop
+          AutomationAssumeRole:
+            type: String
+            description: (Optional) The ARN of the role that allows Automation to perform the actions on your behalf.
+            default: ''
+        mainSteps:
+          - name: AssertNotStopping
+            action: 'aws:assertAwsResourceProperty'
+            isCritical: false
+            onFailure: 'step:WaitClusterAvailable'
+            nextStep: CheckStop
+            inputs:
+              Service: rds
+              Api: DescribeDBClusters
+              DBClusterIdentifier: '{{ClusterName}}'
+              PropertySelector: '$.DBClusters[0].Status'
+              DesiredValues:
+                - stopping
+          - name: WaitClusterAvailable
+            action: 'aws:waitForAwsResourceProperty'
+            inputs:
+              Service: rds
+              Api: DescribeDBClusters
+              DBClusterIdentifier: '{{ClusterName}}'
+              PropertySelector: '$.DBClusters[0].Status'
+              DesiredValues:
+                - available
+          - name: WaitInstanceAvailable
+            action: 'aws:waitForAwsResourceProperty'
+            inputs:
+              Service: rds
+              Api: DescribeDBInstances
+              Filters:
+                - Name: db-cluster-id
+                  Values:
+                    - '{{ClusterName}}'
+              PropertySelector: $.DBInstances..DBInstanceStatus
+              DesiredValues:
+                - available
+          - name: StopCluster
+            action: 'aws:executeAwsApi'
+            inputs:
+              Service: rds
+              Api: StopDBCluster
+              DBClusterIdentifier: '{{ClusterName}}'
+          - name: CheckStop
+            action: 'aws:waitForAwsResourceProperty'
+            onFailure: Abort
+            maxAttempts: 10
+            timeoutSeconds: 600
+            inputs:
+              Service: rds
+              Api: DescribeDBClusters
+              DBClusterIdentifier: '{{ClusterName}}'
+              PropertySelector: '$.DBClusters[0].Status'
+              DesiredValues:
+                - stopped
