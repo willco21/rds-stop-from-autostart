@@ -51,7 +51,10 @@ Resources:
             Action:
               - rds:StopDBCluster
               - rds:DescribeDBClusters
-            Resource: !Sub arn:${AWS::Partition}:rds:*:${AWS::AccountId}:cluster:*
+              - rds:DescribeDBInstances
+            Resource:
+              - !Sub arn:${AWS::Partition}:rds:*:${AWS::AccountId}:cluster:*
+              - !Sub arn:${AWS::Partition}:rds:*:${AWS::AccountId}:db:*
 
   SsmAutomationRole:
     Type: AWS::IAM::Role
