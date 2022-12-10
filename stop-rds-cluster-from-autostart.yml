@@ -22,7 +22,6 @@ Resources:
             Action: 'ssm:StartAutomationExecution'
             Resource:
               - !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:automation-definition/${SsmAutomationStopRdsCluster}:$DEFAULT
-              #- !Sub arn:${AWS::Partition}:ssm:*:${AWS::AccountId}:automation-definition/SRE-StopRdsCluster-NEW:$DEFAULT'
 
   EventBridgeRole:
     Type: AWS::IAM::Role
@@ -93,7 +92,6 @@ Resources:
       Targets:
         - Id: Id7aa1a379-1cb6-46bd-90d2-038a38e85c7d
           Arn: !Sub arn:${AWS::Partition}:ssm:${AWS::Region}:${AWS::AccountId}:automation-definition/${SsmAutomationStopRdsCluster}:$DEFAULT
-            #arn:aws:ssm:ap-northeast-1:811463838477:automation-definition/SRE-StopRdsCluster-NEW:$DEFAULT
           RoleArn: !GetAtt SsmAutomationRole.Arn
           InputTransformer:
             InputPathsMap:
